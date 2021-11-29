@@ -11,11 +11,12 @@ public class BeforeSslAuthenticateEventArgs : ProxyEventArgsBase
     internal readonly CancellationTokenSource TaskCancellationSource;
 
     internal BeforeSslAuthenticateEventArgs(ProxyServer server, TcpClientConnection clientConnection,
-        CancellationTokenSource taskCancellationSource, string sniHostName) : base(server, clientConnection)
+        CancellationTokenSource taskCancellationSource, string sniHostName, int port) : base(server, clientConnection)
     {
         TaskCancellationSource = taskCancellationSource;
         SniHostName = sniHostName;
         ForwardHttpsHostName = sniHostName;
+        ForwardHttpsPort = port;
     }
 
     /// <summary>

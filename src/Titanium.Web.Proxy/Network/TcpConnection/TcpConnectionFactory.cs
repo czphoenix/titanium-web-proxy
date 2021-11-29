@@ -25,7 +25,7 @@ namespace Titanium.Web.Proxy.Network.Tcp;
 internal class TcpConnectionFactory : IDisposable
 {
     // Tcp server connection pool cache
-    private readonly ConcurrentDictionary<string, ConcurrentQueue<TcpServerConnection>> cache = new();
+    private readonly ConcurrentDictionary<string, (ConcurrentQueue<TcpServerConnection> queue, SemaphoreSlim semaphore)> cache = new();
 
     // Tcp connections waiting to be disposed by cleanup task
     private readonly ConcurrentBag<TcpServerConnection> disposalBag = new();
@@ -241,8 +241,11 @@ internal class TcpConnectionFactory : IDisposable
             isHttps, applicationProtocols, upStreamEndPoint, externalProxy);
 
         if (proxyServer.EnableConnectionPool && !noCache)
-            if (cache.TryGetValue(cacheKey, out var existingConnections))
-                lock (existingConnections)
+            if (cache.TryGetValue(cacheKey, out var tuple))
+            {
+                var (existingConnections, semaphoreSlim) = tuple;
+                await semaphoreSlim.WaitAsync(cancellationToken);
+                try
                 {
                     // +3 seconds for potential delay after getting connection
                     var cutOff = DateTime.UtcNow.AddSeconds(-proxyServer.ConnectionTimeOutSeconds + 3);
@@ -251,15 +254,26 @@ internal class TcpConnectionFactory : IDisposable
                         {
                             if (recentConnection.LastAccess > cutOff
                                 && recentConnection.TcpSocket.IsGoodConnection())
+                            {
+                                await proxyServer.InvokeClientServerLinkedEvent(sessionArgs);
+
                                 return recentConnection;
+                            }
 
                             disposalBag.Add(recentConnection);
                         }
                 }
+                finally
+                {
+                    semaphoreSlim.Release();
+                }
+            }
 
         var connection = await CreateServerConnection(remoteHostName, remotePort, httpVersion, isHttps, sslProtocol,
             applicationProtocols, isConnect, proxyServer, sessionArgs, upStreamEndPoint, externalProxy, cacheKey,
             prefetch, cancellationToken);
+
+        await proxyServer.InvokeClientServerLinkedEvent(sessionArgs);
 
         return connection;
     }
@@ -613,8 +627,9 @@ internal class TcpConnectionFactory : IDisposable
 
             while (true)
             {
-                if (cache.TryGetValue(connection.CacheKey, out var existingConnections))
+                if (cache.TryGetValue(connection.CacheKey, out var tuple))
                 {
+                    var (existingConnections, _) = tuple;
                     while (existingConnections.Count >= Server.MaxCachedConnections)
                         if (existingConnections.TryDequeue(out var staleConnection))
                             disposalBag.Add(staleConnection);
@@ -626,7 +641,7 @@ internal class TcpConnectionFactory : IDisposable
                 }
 
                 if (cache.TryAdd(connection.CacheKey,
-                        new ConcurrentQueue<TcpServerConnection>(new[] { connection })))
+                        (new ConcurrentQueue<TcpServerConnection>(new[] { connection }), new SemaphoreSlim(1))))
                     break;
             }
         }
@@ -663,7 +678,7 @@ internal class TcpConnectionFactory : IDisposable
                 var cutOff = DateTime.UtcNow.AddSeconds(-Server.ConnectionTimeOutSeconds);
                 foreach (var item in cache)
                 {
-                    var queue = item.Value;
+                    var (queue, _) = item.Value;
 
                     while (queue.Count > 0)
                         if (queue.TryDequeue(out var connection))
@@ -685,7 +700,7 @@ internal class TcpConnectionFactory : IDisposable
                     await @lock.WaitAsync();
 
                     // clear empty queues
-                    var emptyKeys = cache.ToArray().Where(x => x.Value.Count == 0).Select(x => x.Key);
+                    var emptyKeys = cache.ToArray().Where(x => x.Value.queue.Count == 0).Select(x => x.Key);
                     foreach (var key in emptyKeys) cache.TryRemove(key, out _);
                 }
                 finally
@@ -720,7 +735,7 @@ internal class TcpConnectionFactory : IDisposable
             {
                 @lock.Wait();
 
-                foreach (var queue in cache.Select(x => x.Value).ToList())
+                foreach (var queue in cache.Select(x => x.Value.queue).ToList())
                     while (!queue.IsEmpty)
                         if (queue.TryDequeue(out var connection))
                             disposalBag.Add(connection);

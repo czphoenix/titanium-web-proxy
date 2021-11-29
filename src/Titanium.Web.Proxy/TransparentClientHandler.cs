@@ -47,8 +47,7 @@ public partial class ProxyServer
             {
                 var httpsHostName = clientHelloInfo.GetServerName() ?? endPoint.GenericCertificateName;
 
-                var args = new BeforeSslAuthenticateEventArgs(this, clientConnection, cancellationTokenSource,
-                    httpsHostName);
+                var args = new BeforeSslAuthenticateEventArgs(this, clientConnection, cancellationTokenSource, httpsHostName, port);
 
                 await endPoint.InvokeBeforeSslAuthenticate(this, args, ExceptionFunc);
 
@@ -98,12 +97,20 @@ public partial class ProxyServer
                 }
                 else
                 {
+                    var pipeArgs = new PipeEventArgs(this, clientConnection, ExceptionFunc, httpsHostName, port);
+                    await onBeforePipe(pipeArgs);
+
                     var sessionArgs = new SessionEventArgs(this, endPoint, clientStream, null, cancellationTokenSource);
+
+                    IExternalProxy? customUpStreamProxy = null;
+                    if (GetCustomHttpsUpStreamProxyFunc != null)
+                        customUpStreamProxy = await GetCustomHttpsUpStreamProxyFunc(new GetCustomUpStreamProxyEventArgs(this, clientConnection, endPoint, args.ForwardHttpsHostName, args.ForwardHttpsPort));
+
                     var connection = (await TcpConnectionFactory.GetServerConnection(this, args.ForwardHttpsHostName,
                         args.ForwardHttpsPort,
                         HttpHeader.VersionUnknown, false, null,
                         true, sessionArgs, UpStreamEndPoint,
-                        UpStreamHttpsProxy, true, false, cancellationToken))!;
+                        customUpStreamProxy ?? UpStreamHttpsProxy, true, false, cancellationToken))!;
 
                     try
                     {
@@ -118,6 +125,8 @@ public partial class ProxyServer
                                 // clientStream.Available should be at most BufferSize because it is using the same buffer size
                                 await clientStream.ReadAsync(data, 0, available, cancellationToken);
                                 await connection.Stream.WriteAsync(data, 0, available, true, cancellationToken);
+
+                                pipeArgs.OnDataSent(data, 0, available);
                             }
                             finally
                             {
@@ -126,8 +135,12 @@ public partial class ProxyServer
                         }
 
                         if (!clientStream.IsClosed && !connection.Stream.IsClosed)
+                        {
                             await TcpHelper.SendRaw(clientStream, connection.Stream, BufferPool,
-                                null, null, cancellationTokenSource, ExceptionFunc);
+                                pipeArgs.OnDataSent, pipeArgs.OnDataReceived, cancellationTokenSource, ExceptionFunc);
+
+                            await onAfterPipe(pipeArgs);
+                        }
                     }
                     finally
                     {

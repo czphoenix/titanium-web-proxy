@@ -313,8 +313,7 @@ public partial class ProxyServer : IDisposable
     public ExceptionHandler? ExceptionFunc
     {
         get => exceptionFunc;
-        set
-        {
+        set {
             exceptionFunc = value;
             CertificateManager.ExceptionFunc = value;
         }
@@ -372,10 +371,10 @@ public partial class ProxyServer : IDisposable
     public event AsyncEventHandler<SessionEventArgs>? BeforeRequest;
 
 #if DEBUG
-        /// <summary>
-        ///     Intercept request body send event to server. 
-        /// </summary>
-        public event AsyncEventHandler<BeforeBodyWriteEventArgs>? OnRequestBodyWrite;
+    /// <summary>
+    ///     Intercept request body send event to server. 
+    /// </summary>
+    public event AsyncEventHandler<BeforeBodyWriteEventArgs>? OnRequestBodyWrite;
 #endif
     /// <summary>
     ///     Intercept response event from server.
@@ -383,10 +382,10 @@ public partial class ProxyServer : IDisposable
     public event AsyncEventHandler<SessionEventArgs>? BeforeResponse;
 
 #if DEBUG
-        /// <summary>
-        ///     Intercept request body send event to client. 
-        /// </summary>
-        public event AsyncEventHandler<BeforeBodyWriteEventArgs>? OnResponseBodyWrite;
+    /// <summary>
+    ///     Intercept request body send event to client. 
+    /// </summary>
+    public event AsyncEventHandler<BeforeBodyWriteEventArgs>? OnResponseBodyWrite;
 #endif
     /// <summary>
     ///     Intercept after response event from server.
@@ -787,11 +786,16 @@ public partial class ProxyServer : IDisposable
 
         using (var clientConnection = new TcpClientConnection(this, tcpClientSocket))
         {
+            await InvokeClientConnectionCreatedEvent(new ClientConnectionCreatedEventArgs(this, clientConnection, endPoint));
+
             if (endPoint is ExplicitProxyEndPoint eep)
                 await HandleClient(eep, clientConnection);
             else if (endPoint is TransparentProxyEndPoint tep)
                 await HandleClient(tep, clientConnection);
-            else if (endPoint is SocksProxyEndPoint sep) await HandleClient(sep, clientConnection);
+            else if (endPoint is SocksProxyEndPoint sep) 
+                await HandleClient(sep, clientConnection);
+
+            await InvokeClientConnectionTerminatedEvent(new ClientConnectionTerminatedEventArgs(this, clientConnection));
         }
     }
 

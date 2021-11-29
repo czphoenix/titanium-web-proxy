@@ -5,6 +5,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Threading.Tasks;
+using Titanium.Web.Proxy.EventArguments;
 using Titanium.Web.Proxy.Helpers;
 using Titanium.Web.Proxy.Models;
 
@@ -13,7 +14,7 @@ namespace Titanium.Web.Proxy.Network.Tcp;
 /// <summary>
 ///     An object that holds TcpConnection to a particular server and port
 /// </summary>
-internal class TcpClientConnection : IDisposable
+public class TcpClientConnection : IDisposable
 {
     private readonly Socket tcpClientSocket;
 
@@ -50,8 +51,14 @@ internal class TcpClientConnection : IDisposable
 
     public Stream GetStream()
     {
-        return new NetworkStream(tcpClientSocket, true);
+        var wrapper = new NetworkStreamWrapper(tcpClientSocket, true);
+        wrapper.DataRead += (sender, args) => DataRead?.Invoke(sender, args);
+        wrapper.DataWrite += (sender, args) => DataWrite?.Invoke(sender, args);
+        return wrapper;
     }
+
+    public event EventHandler<TrafficDataEventArgs>? DataRead;
+    public event EventHandler<TrafficDataEventArgs>? DataWrite;
 
     public int GetProcessId(ProxyEndPoint endPoint)
     {
@@ -103,8 +110,8 @@ internal class TcpClientConnection : IDisposable
     ~TcpClientConnection()
     {
 #if DEBUG
-            // Finalizer should not be called
-            System.Diagnostics.Debugger.Break();
+        // Finalizer should not be called
+        System.Diagnostics.Debugger.Break();
 #endif
 
         Dispose(false);
